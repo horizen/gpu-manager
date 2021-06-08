@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	nveval "tkestack.io/gpu-manager/pkg/algorithm/nvidia"
 	"tkestack.io/gpu-manager/pkg/config"
 	"tkestack.io/gpu-manager/pkg/device"
@@ -662,6 +663,8 @@ func (ta *NvidiaTopoAllocator) Allocate(_ context.Context, reqs *pluginapi.Alloc
 
 	klog.V(4).Infof("Request GPU device: %s", strings.Join(req.DevicesIDs, ","))
 
+	ta.checkUnfinishedPod()
+
 	if ta.unfinishedPod != nil {
 		candidatePod = ta.unfinishedPod
 		cache := ta.allocatedPod.GetCache(string(candidatePod.UID))
@@ -742,6 +745,23 @@ func (ta *NvidiaTopoAllocator) Allocate(_ context.Context, reqs *pluginapi.Alloc
 	}
 
 	return resps, nil
+}
+
+func (ta *NvidiaTopoAllocator) checkUnfinishedPod() {
+	if ta.unfinishedPod == nil {
+		return
+	}
+	podFromK8s, err := ta.k8sClient.CoreV1().Pods(ta.unfinishedPod.Namespace).Get(ta.unfinishedPod.Name, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			ta.unfinishedPod = nil
+		} else {
+			klog.Errorf("get pod from k8s failed: %v", err)
+		}
+	} else if ta.unfinishedPod.UID != podFromK8s.UID {
+		ta.unfinishedPod = nil
+		klog.Infof("unfinished pod uid is changed, may be pod is reconstructed")
+	}
 }
 
 //ListAndWatch is not implement
